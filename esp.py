@@ -1069,12 +1069,39 @@ class Overlay(QWidget):
         return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
     def _find_best_target(self, camera, screen_w, screen_h):
+        # Extra self-filter: iter_players should skip local, but if local controller
+        # resolution fails it can leak through. Skip anything close to the camera
+        # or to the local pawn.
+        world = self.esp._get_world()
+        local_pc = self.esp._get_local_controller(world) if world else 0
+        local_pawn = rp(self.esp.pm, local_pc + self.esp.offsets["APlayerController::AcknowledgedPawn"]) if local_pc else 0
+        local_pos = None
+        if local_pawn:
+            root = rp(self.esp.pm, local_pawn + self.esp.offsets["AActor::RootComponent"])
+            if root:
+                local_pos = rvec3(self.esp.pm, root + self.esp.offsets["USceneComponent::RelativeLocation"])
+
         cx, cy = screen_w / 2, screen_h / 2
+        cam_loc = camera["loc"]
         best_dist = float("inf")
         best_target = None
         for is_local, pos, idx in self.esp.iter_players(include_local=False, team_filter=self.config.team_filter):
             if is_local:
                 continue
+            # Skip self if it leaked through.
+            if local_pos:
+                dself = math.sqrt((pos[0] - local_pos[0]) ** 2 +
+                                  (pos[1] - local_pos[1]) ** 2 +
+                                  (pos[2] - local_pos[2]) ** 2)
+                if dself < 50.0:
+                    continue
+            # Skip anything right on top of the camera (failsafe for broken local filter).
+            dcam = math.sqrt((pos[0] - cam_loc[0]) ** 2 +
+                             (pos[1] - cam_loc[1]) ** 2 +
+                             (pos[2] - cam_loc[2]) ** 2)
+            if dcam < 50.0:
+                continue
+
             aim_pos = (pos[0], pos[1], pos[2] + self.config.aimbot_target_offset)
             s = w2s(aim_pos, camera, screen_w, screen_h)
             if not s:
