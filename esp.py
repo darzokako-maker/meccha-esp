@@ -12,7 +12,7 @@ from typing import Tuple
 
 import pymem
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QCheckBox, QComboBox, QLabel,
+    QApplication, QWidget, QCheckBox, QLabel,
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QColorDialog,
     QSpinBox
 )
@@ -628,17 +628,16 @@ def w2s(world_pos, camera, screen_w, screen_h):
 @dataclass
 class Config:
     enabled: bool = True
-    box_esp: bool = True
-    box_type: str = "corner"  # "2d" or "corner"
+    box_esp: bool = True  # now draws a dot instead of a box
     show_local: bool = True
     show_names: bool = True
     show_distance: bool = True
     snap_lines: bool = True
     enemy_color: Tuple[int, int, int] = (255, 0, 0)
     local_color: Tuple[int, int, int] = (0, 255, 0)
-    box_height_world: float = 100.0
-    box_width_ratio: float = 0.45
+    box_height_world: float = 100.0  # still used to find the model center
     box_y_offset: int = 0
+    dot_radius: int = 8
     team_filter: bool = True
 
 
@@ -678,12 +677,6 @@ class Menu(QWidget):
                 width: 16px;
                 height: 16px;
             }
-            QComboBox {
-                background-color: #333;
-                color: #eee;
-                border: 1px solid #555;
-                padding: 4px;
-            }
             QPushButton {
                 background-color: #333;
                 color: #eee;
@@ -705,7 +698,7 @@ class Menu(QWidget):
         layout.addWidget(title)
 
         self.cb_enabled = self._chk("ESP Enabled", "enabled")
-        self.cb_box = self._chk("Box ESP", "box_esp")
+        self.cb_box = self._chk("Dot ESP", "box_esp")
         self.cb_local = self._chk("Show Local Player", "show_local")
         self.cb_names = self._chk("Show Names", "show_names")
         self.cb_dist = self._chk("Show Distance", "show_distance")
@@ -719,14 +712,14 @@ class Menu(QWidget):
         layout.addWidget(self.cb_snap)
         layout.addWidget(self.cb_team)
 
-        box_row = QHBoxLayout()
-        box_row.addWidget(QLabel("Box Style:"))
-        self.cmb_box = QComboBox()
-        self.cmb_box.addItems(["2D", "Corner"])
-        self.cmb_box.setCurrentText("Corner" if self.config.box_type == "corner" else "2D")
-        self.cmb_box.currentTextChanged.connect(self._on_box_changed)
-        box_row.addWidget(self.cmb_box)
-        layout.addLayout(box_row)
+        dot_row = QHBoxLayout()
+        dot_row.addWidget(QLabel("Dot Radius:"))
+        self.spn_dot = QSpinBox()
+        self.spn_dot.setRange(2, 32)
+        self.spn_dot.setValue(self.config.dot_radius)
+        self.spn_dot.valueChanged.connect(lambda v: setattr(self.config, "dot_radius", v))
+        dot_row.addWidget(self.spn_dot)
+        layout.addLayout(dot_row)
 
         color_row = QHBoxLayout()
         self.btn_enemy_color = QPushButton("Enemy Color")
@@ -738,7 +731,7 @@ class Menu(QWidget):
         layout.addLayout(color_row)
 
         height_row = QHBoxLayout()
-        height_row.addWidget(QLabel("Box Height:"))
+        height_row.addWidget(QLabel("Model Height:"))
         self.spn_height = QSpinBox()
         self.spn_height.setRange(50, 250)
         self.spn_height.setValue(int(self.config.box_height_world))
@@ -769,9 +762,6 @@ class Menu(QWidget):
         cb.setChecked(getattr(self.config, attr))
         cb.stateChanged.connect(lambda s, a=attr: setattr(self.config, a, bool(s)))
         return cb
-
-    def _on_box_changed(self, text):
-        self.config.box_type = text.lower()
 
     def _pick_enemy_color(self):
         c = QColorDialog.getColor(QColor(*self.config.enemy_color), self)
@@ -869,18 +859,18 @@ class Overlay(QWidget):
 
         count = 0
         for is_local, pos, idx in self.esp.iter_players(include_local=self.config.show_local, team_filter=self.config.team_filter):
-            screen_info = self._project_box(pos, cam, w, h)
+            screen_info = self._project_dot(pos, cam, w, h)
             if not screen_info:
                 continue
-            sx, sy, box_w, box_h = screen_info
+            sx, sy = screen_info
             color = self.config.local_color if is_local else self.config.enemy_color
 
             if self.config.box_esp:
-                self._draw_box(painter, sx, sy, box_w, box_h, color)
+                self._draw_dot(painter, sx, sy, color)
 
             if self.config.snap_lines:
                 painter.setPen(QPen(QColor(*color), 1))
-                painter.drawLine(int(w / 2), int(h), int(sx), int(sy + box_h / 2))
+                painter.drawLine(int(w / 2), int(h), int(sx), int(sy))
 
             label_parts = []
             if self.config.show_names:
@@ -891,49 +881,30 @@ class Overlay(QWidget):
             if label_parts:
                 painter.setPen(QPen(QColor(*color)))
                 text = " | ".join(label_parts)
-                painter.drawText(int(sx - box_w / 2), int(sy - box_h / 2 - 6), text)
+                painter.drawText(int(sx + self.config.dot_radius + 4), int(sy), text)
 
             count += 1
 
         painter.setPen(QPen(QColor(255, 255, 255)))
         painter.drawText(10, 20, f"Players: {count}")
 
-    def _project_box(self, feet_pos, camera, screen_w, screen_h):
+    def _project_dot(self, feet_pos, camera, screen_w, screen_h):
         head_pos = (feet_pos[0], feet_pos[1], feet_pos[2] + self.config.box_height_world)
         s_feet = w2s(feet_pos, camera, screen_w, screen_h)
         s_head = w2s(head_pos, camera, screen_w, screen_h)
         if not s_feet or not s_head:
             return None
 
-        box_h = abs(s_feet[1] - s_head[1])
-        box_w = box_h * self.config.box_width_ratio
+        # Center of the player model in screen space.
         cx = s_feet[0]
         cy = (s_feet[1] + s_head[1]) / 2 + self.config.box_y_offset
-        return (cx, cy, box_w, box_h)
+        return (cx, cy)
 
-    def _draw_box(self, painter, cx, cy, bw, bh, color):
-        x1 = int(cx - bw / 2)
-        y1 = int(cy - bh / 2)
-        x2 = int(cx + bw / 2)
-        y2 = int(cy + bh / 2)
-        painter.setPen(QPen(QColor(*color), 2))
-
-        if self.config.box_type == "corner":
-            corner = int(min(bw, bh) * 0.25)
-            # Top-left
-            painter.drawLine(x1, y1, x1 + corner, y1)
-            painter.drawLine(x1, y1, x1, y1 + corner)
-            # Top-right
-            painter.drawLine(x2, y1, x2 - corner, y1)
-            painter.drawLine(x2, y1, x2, y1 + corner)
-            # Bottom-left
-            painter.drawLine(x1, y2, x1 + corner, y2)
-            painter.drawLine(x1, y2, x1, y2 - corner)
-            # Bottom-right
-            painter.drawLine(x2, y2, x2 - corner, y2)
-            painter.drawLine(x2, y2, x2, y2 - corner)
-        else:
-            painter.drawRect(x1, y1, int(bw), int(bh))
+    def _draw_dot(self, painter, cx, cy, color):
+        r = self.config.dot_radius
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(*color))
+        painter.drawEllipse(int(cx - r), int(cy - r), r * 2, r * 2)
 
 
 # ---------------------------------------------------------------------------
