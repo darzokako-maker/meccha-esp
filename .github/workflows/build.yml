@@ -3,7 +3,7 @@ name: Build Pure ESP EXE
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch: # Manuel tetikleme butonunu aktif eder
 
 jobs:
   build:
@@ -17,16 +17,17 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip'
+        # requirements.txt hatasını engellemek için cache özelliğini kaldırıp manuel yöneteceğiz
 
-    - name: Install Dependencies
+    - name: Install Dependencies Directly
       run: |
         python -m pip install --upgrade pip
-        pip install pymem PyQt5 pyinstaller
+        # Tüm gerekli paketleri doğrudan buradan tek tek yüklüyoruz
+        pip install pymem PyQt5 pyinstaller pywin32
 
     - name: Build Pure ESP with PyInstaller
       run: |
-        # --uac-admin eklenmiştir çünkü pymem ReadProcessMemory için yetki ister.
+        # esp.py dosyasını tek parça, arayüzlü (siyah ekransız) ve admin yetkili derler
         pyinstaller --onefile --noconsole --uac-admin --name="Chameleon_Pure_ESP" esp.py
 
     - name: Upload Artifact
@@ -34,5 +35,6 @@ jobs:
       with:
         name: Pure-ESP-Executable
         path: dist/Chameleon_Pure_ESP.exe
+        if-no-files-found: error
         retention-days: 5
         
