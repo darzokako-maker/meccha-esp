@@ -272,7 +272,6 @@ class MecchaESP:
         if not world: return
         gamestate = rp(self.pm, world + self.offsets["UWorld::GameState"])
         pc = self._get_local_controller(world)
-        local_pawn = rp(self.pm, pc + self.offsets["APlayerController::AcknowledgedPawn"]) if pc else 0
         local_ps = rp(self.pm, pc + self.offsets["AController::PlayerState"]) if pc else 0
 
         if gamestate:
@@ -322,7 +321,7 @@ class Menu(QWidget):
         self.setWindowTitle("MECCHA PURE ESP")
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(240, 320) # Küçültülmüş temiz boyut
+        self.setFixedSize(240, 320)
         self._build_ui()
 
     def _build_ui(self):
@@ -367,8 +366,11 @@ class Overlay(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowTransparentForInput)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setGeometry(0, 0, 1920, 1080)
-        QTimer(self).timeout.connect(self.update)
-        QTimer(self).timeout.connect(self.startTimer(16))
+        
+        # Hatalı olan startTimer kaldırıldı, yerine stabil tetikleyici QTimer atandı.
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(16) 
 
     def paintEvent(self, event):
         if not self.config.enabled: return
@@ -425,4 +427,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                     
