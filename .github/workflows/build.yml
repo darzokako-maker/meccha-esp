@@ -1,0 +1,38 @@
+name: Build Pure ESP EXE
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pymem PyQt5 pyinstaller
+
+    - name: Build Pure ESP with PyInstaller
+      run: |
+        # --uac-admin eklenmiştir çünkü pymem ReadProcessMemory için yetki ister.
+        pyinstaller --onefile --noconsole --uac-admin --name="Chameleon_Pure_ESP" esp.py
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Pure-ESP-Executable
+        path: dist/Chameleon_Pure_ESP.exe
+        retention-days: 5
+        
