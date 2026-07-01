@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Production-ready external box ESP for MECCHA CHAMELEON (UE5.6).
-Fully external: SAFE READ-ONLY VISUAL ESP (No Aimbot / No Memory Write)
+Production-ready external box ESP & Legit Speedhack for MECCHA CHAMELEON (UE5.6).
+Fully external: SAFE READ-ONLY VISUAL ESP with Safe Memory Write Speed Modifier.
 """
 import sys
 import struct
@@ -231,6 +231,10 @@ class MecchaESP:
         "APlayerCameraManager::CameraCachePrivate": ("PlayerCameraManager", "CameraCachePrivate"),
         "AActor::RootComponent": ("Actor", "RootComponent"),
         "USceneComponent::RelativeLocation": ("SceneComponent", "RelativeLocation"),
+        
+        # Dumper-7 UCharacterMovement altyapısı için eklenen dinamik yansıma haritaları
+        "ACharacter::CharacterMovement": ("Character", "CharacterMovement"),
+        "UCharacterMovementComponent::MaxWalkSpeed": ("CharacterMovementComponent", "MaxWalkSpeed"),
     }
 
     def __init__(self):
@@ -244,6 +248,7 @@ class MecchaESP:
         self.resolver = OffsetResolver(self.pm, self.objects)
         self.offsets = self.resolver.resolve_map(self.OFFSET_MAP)
         self.gengine = self.objects.find_first_instance("GameEngine")
+        self.original_speed = 0.0
 
     def _get_world(self):
         vp = rp(self.pm, self.gengine + self.offsets["UEngine::GameViewport"])
@@ -254,6 +259,38 @@ class MecchaESP:
         gi = rp(self.pm, world + self.offsets["UWorld::OwningGameInstance"])
         lp_data, lp_count, _ = read_array(self.pm, gi + self.offsets["UGameInstance::LocalPlayers"])
         return rp(self.pm, rp(self.pm, lp_data) + self.offsets["UPlayer::PlayerController"]) if lp_count else 0
+
+    def update_legit_speed(self, state: bool):
+        """
+        Dinamik çözülen ofsetleri kullanarak yerel oyuncunun hareket hızını manipüle eder.
+        """
+        try:
+            world = self._get_world()
+            pc = self._get_local_controller(world)
+            if not pc: return
+            
+            pawn = rp(self.pm, pc + self.offsets["APlayerController::AcknowledgedPawn"])
+            if not pawn: return
+            
+            movement_comp = rp(self.pm, pawn + self.offsets["ACharacter::CharacterMovement"])
+            if not movement_comp: return
+            
+            speed_addr = movement_comp + self.offsets["UCharacterMovementComponent::MaxWalkSpeed"]
+            current_speed = rfloat(self.pm, speed_addr)
+            
+            if state:
+                # Oyunun orijinal hızını ilk kez açıldığında yedekle (Genelde 400.0 veya 600.0)
+                if self.original_speed == 0.0 or self.original_speed > 2000.0:
+                    self.original_speed = current_speed if current_speed > 10.0 else 600.0
+                
+                # Legit eşik: Orijinal hızı sadece %25 artırarak sunucu korumalarını (kick/rubberband) atlatır
+                target_speed = self.original_speed * 1.25
+                self.pm.write_float(speed_addr, target_speed)
+            else:
+                if self.original_speed > 10.0:
+                    self.pm.write_float(speed_addr, self.original_speed)
+        except:
+            pass
 
     def get_camera(self):
         world = self._get_world()
@@ -310,18 +347,20 @@ class Config:
     show_names: bool = True
     show_distance: bool = True
     snap_lines: bool = True
+    legit_speed: bool = False  # Speedhack varsayılan olarak kapalı gelir
     enemy_color: Tuple[int, int, int] = (255, 0, 0)
     local_color: Tuple[int, int, int] = (0, 255, 0)
     dot_radius: int = 6
 
 class Menu(QWidget):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, esp_instance: MecchaESP):
         super().__init__()
         self.config = config
+        self.esp = esp_instance
         self.setWindowTitle("MECCHA PURE ESP")
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(240, 320)
+        self.setFixedSize(240, 360)  # Buton için alan genişletildi
         self._build_ui()
 
     def _build_ui(self):
@@ -340,6 +379,12 @@ class Menu(QWidget):
         layout.addWidget(self._chk("Mesafeyi Yaz", "show_distance"))
         layout.addWidget(self._chk("İz Çizgileri (Lines)", "snap_lines"))
 
+        # Legit Speedhack Onay Kutusu
+        cb_speed = QCheckBox("Legit Speedhack (%25)")
+        cb_speed.setChecked(self.config.legit_speed)
+        cb_speed.stateChanged.connect(self._toggle_speed)
+        layout.addWidget(cb_speed)
+
         btn_color = QPushButton("Düşman Rengi Seç")
         btn_color.clicked.connect(self._pick_color)
         layout.addWidget(btn_color)
@@ -355,6 +400,11 @@ class Menu(QWidget):
         cb.stateChanged.connect(lambda s: setattr(self.config, attr, bool(s)))
         return cb
 
+    def _toggle_speed(self, state):
+        status = bool(state)
+        self.config.legit_speed = status
+        self.esp.update_legit_speed(status)
+
     def _pick_color(self):
         c = QColorDialog.getColor(QColor(*self.config.enemy_color), self)
         if c.isValid(): self.config.enemy_color = (c.red(), c.green(), c.blue())
@@ -367,7 +417,6 @@ class Overlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setGeometry(0, 0, 1920, 1080)
         
-        # Hatalı olan startTimer kaldırıldı, yerine stabil tetikleyici QTimer atandı.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
         self.timer.start(16) 
@@ -380,6 +429,10 @@ class Overlay(QWidget):
         w, h = self.width(), self.height()
         cam = self.esp.get_camera()
         if not cam: return
+
+        # Speedhack aktifse her kare yenilemesinde adresin güncelliğini doğrula (Oyun içi korumalara karşı)
+        if self.config.legit_speed:
+            self.esp.update_legit_speed(True)
 
         for is_local, pos, idx in self.esp.iter_players(include_local=self.config.show_local):
             s = w2s(pos, cam, w, h)
@@ -406,9 +459,13 @@ class Overlay(QWidget):
 def main():
     app = QApplication(sys.argv)
     config = Config()
-    try: esp = MecchaESP()
-    except: return
-    menu = Menu(config)
+    try: 
+        esp = MecchaESP()
+    except Exception as e:
+        print(f"Başlatma Hatası: {e}")
+        return
+        
+    menu = Menu(config, esp)
     overlay = Overlay(esp, config)
     overlay.show()
     menu.show()
@@ -420,6 +477,7 @@ def main():
             s = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
             if s and not states[k]: menu.setVisible(not menu.isVisible())
             states[k] = s
+            
     t = QTimer()
     t.timeout.connect(poll)
     t.start(50)
@@ -427,4 +485,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                     
